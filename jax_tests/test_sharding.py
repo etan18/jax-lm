@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 from flax import nnx
 
-from jax_impl import model as model_module
+from jax_impl.distributed import model as model_module
 
 from . import adapters
 

@@ -10,7 +10,7 @@ from jaxtyping import Float, Int
 from torch import Tensor
 
 from data import tokenizer, train_bpe
-from pytorch_impl import model_basic as model
+from pytorch_impl.basic import model
 
 
 def run_linear(
@@ -608,7 +608,7 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    from pytorch_impl import model_basic as model_module
+    from pytorch_impl.basic import model as model_module
 
     return model_module.save_checkpoint(model, optimizer, iteration, out)
 
@@ -631,7 +631,7 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    from pytorch_impl import model_basic as model_module
+    from pytorch_impl.basic import model as model_module
 
     return model_module.load_checkpoint(src, model, optimizer)
 

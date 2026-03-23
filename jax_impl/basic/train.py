@@ -16,11 +16,9 @@ import wandb
 import yaml
 from flax import nnx
 from jax import Array
-from jax.sharding import Mesh
-from jax.sharding import PartitionSpec as P
 
-from jax_impl import model as model_module
-from jax_impl.data import DatasetLike, DummyDataset, MemMapDataset, get_batch_from_memmap
+from jax_impl.basic import model as model_module
+from jax_impl.data import DatasetLike, DummyDataset, MemMapDataset
 
 
 def load_config(config_path: str) -> dict:
@@ -38,20 +36,13 @@ def setup_logging(use_wandb: bool, config: dict, run_name: str | None = None):
     return None
 
 
-def create_mesh(mesh_shape: list[int], mesh_axis_names: list[str]) -> Mesh:
-    """Create a device mesh for sharding.
-
-    Args:
-        mesh_shape (list[int]): Shape of the device mesh, e.g., [data_parallel, model_parallel]
-        mesh_axis_names (list[str]): Names for each mesh axis, e.g., ['data', 'model']
-
-    Returns:
-        jax.sharding.Mesh: JAX Mesh object for sharding
-    """
-    auto_mesh = jax.make_mesh(tuple(mesh_shape), tuple(mesh_axis_names))
-    print(f"Created mesh with shape {mesh_shape} and axes {mesh_axis_names}")
-    print(f"Devices: {jax.devices()}")
-    return auto_mesh
+def get_batch_from_memmap(
+    rngs: nnx.Rngs,
+    dataset: DatasetLike,
+    batch_size: int,
+    context_length: int,
+) -> tuple[Array, Array]:
+    return model_module.get_batch(rngs, dataset.data, batch_size, context_length)
 
 
 def estimate_loss(
@@ -61,8 +52,6 @@ def estimate_loss(
     val_dataset: DatasetLike | None,
     config: dict,
     eval_iters: int,
-    mesh: Mesh | None = None,
-    batch_partition_spec: P | None = None,
 ) -> dict:
     """Estimate loss on training and validation sets.
 
@@ -72,10 +61,9 @@ def estimate_loss(
         val_dataset: Validation dataset (optional)
         config: Configuration dictionary
         eval_iters: Number of iterations to evaluate
-        mesh: Optional mesh for sharding (if None, will be created from config)
 
     Returns:
-        Dictionary with 'train' and 'val' losses, optionally sharded
+        Dictionary with 'train' and 'val' losses
     """
     losses = {}
 
@@ -85,9 +73,7 @@ def estimate_loss(
     # Evaluate on training set
     train_losses = []
     for _ in range(eval_iters):
-        inputs, targets = get_batch_from_memmap(
-            rngs, train_dataset, batch_size, context_length, mesh, batch_partition_spec
-        )
+        inputs, targets = get_batch_from_memmap(rngs, train_dataset, batch_size, context_length)
 
         logits = model(inputs)
         # Reshape for cross-entropy: (B, S, V) -> (B*S, V) and (B, S) -> (B*S,)
@@ -100,9 +86,7 @@ def estimate_loss(
     if val_dataset is not None:
         val_losses = []
         for _ in range(eval_iters):
-            inputs, targets = get_batch_from_memmap(
-                rngs, val_dataset, batch_size, context_length, mesh, batch_partition_spec
-            )
+            inputs, targets = get_batch_from_memmap(rngs, val_dataset, batch_size, context_length)
             logits = model(inputs)
             B, S, V = logits.shape
             loss = model_module.cross_entropy_loss(logits.reshape(B * S, V), targets.reshape(B * S))
@@ -141,24 +125,6 @@ def train(
     rngs = nnx.Rngs(seed)
     np.random.seed(seed)
 
-    # Resolve mesh/sharding mode from config.
-    sharding_config_dict = config.get("sharding", {})
-    mesh = None
-    if sharding_config_dict.get("enabled", False):
-        mesh = create_mesh(sharding_config_dict["mesh_shape"], sharding_config_dict["mesh_axis_names"])
-
-    # Resolve sharding mode/specs when a mesh is active.
-    model_sharding_config = None
-    batch_partition_spec = None
-    if mesh is not None:
-        sharding_mode = sharding_config_dict.get("mode")
-        if sharding_mode is None:
-            raise ValueError("Must set sharding.mode when sharding.enabled=true.")
-        model_module.validate_mesh_for_mode(mesh, sharding_mode)
-        model_sharding_config = model_module.get_sharding_config_for_mode(sharding_mode)  # model sharding config
-        model_module.validate_model_partitioning(config["model"], mesh, model_sharding_config)
-        batch_partition_spec = P(*model_module.get_batch_sharding_for_mode(sharding_mode))  # data sharding config
-
     # Load datasets
     print("\nLoading datasets...")
     dummy_data = config.get("data", {}).get("dummy_data", False)
@@ -186,11 +152,6 @@ def train(
     use_lr_schedule = "warmup_iters" in lr_schedule_config
     optimizer_lr_schedule = None
     if use_lr_schedule:
-        required_schedule_keys = {"warmup_iters", "max_learning_rate", "min_learning_rate", "cosine_cycle_iters"}
-        missing_schedule_keys = required_schedule_keys.difference(lr_schedule_config)
-        if missing_schedule_keys:
-            raise ValueError(f"Missing lr_schedule keys: {sorted(missing_schedule_keys)}.")
-
         max_learning_rate = float(lr_schedule_config["max_learning_rate"])
         min_learning_rate = float(lr_schedule_config["min_learning_rate"])
         warmup_iters = int(lr_schedule_config["warmup_iters"])
@@ -209,8 +170,6 @@ def train(
         rngs,
         config["model"],
         config["optimizer"],
-        model_sharding_config,
-        mesh,
         gradient_clip=gradient_clip,
         lr_schedule=optimizer_lr_schedule,
     )
@@ -219,10 +178,7 @@ def train(
     total_params = sum(p.size for p in jax.tree.leaves(nnx.state(model)) if isinstance(p, Array))
     print(f"Total parameters: {total_params:,}")
 
-    if mesh is not None:
-        print(f"Model is sharded across devices (mode={sharding_mode}, mesh_shape={dict(mesh.shape)}).")
-    else:
-        print("Model sharding is disabled.")
+    print("Model sharding is disabled.")
 
     start_iter = 0
     # Load checkpoint if resuming
@@ -264,9 +220,7 @@ def train(
             lr = float(config["optimizer"]["lr"])
 
         # Sample batch
-        inputs, targets = get_batch_from_memmap(
-            rngs, train_dataset, batch_size, context_length, mesh, batch_partition_spec
-        )
+        inputs, targets = get_batch_from_memmap(rngs, train_dataset, batch_size, context_length)
 
         loss, grad_state, has_nonfinite_update = model_module.train_step(model, optimizer, inputs, targets)
 
@@ -332,8 +286,6 @@ def train(
                 val_dataset,
                 config,
                 eval_iters,
-                mesh,
-                batch_partition_spec,
             )
             model.train()
 
@@ -374,9 +326,9 @@ def train(
 
 def main():
     """Parse arguments and run training."""
-    parser = argparse.ArgumentParser(description="Train Transformer Language Model with JAX Sharding")
+    parser = argparse.ArgumentParser(description="Train Transformer Language Model with JAX (basic, no sharding)")
     parser.add_argument(
-        "--config", type=str, default="jax_impl/config.yaml", help="Path to YAML configuration file"
+        "--config", type=str, default="jax_impl/basic/config.yaml", help="Path to YAML configuration file"
     )
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging")
     parser.add_argument("--run-name", type=str, default=None, help="Name for this training run (for W&B)")

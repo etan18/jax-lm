@@ -5,7 +5,7 @@ export CUDA_VISIBLE_DEVICES="0"
 set -e
 
 PYTHON_CMD="uv run python"
-CONFIG="pytorch_impl/config.yaml"
+CONFIG="pytorch_impl/distributed/config.yaml"
 USE_WANDB=false
 RUN_NAME=""
 NPROC_PER_NODE=""
@@ -52,7 +52,7 @@ else
     fi
 fi
 
-CMD=("${PYTHON_CMD_ARR[@]}" -m torch.distributed.run --standalone --nproc_per_node "$NPROC_PER_NODE" -m pytorch_impl.train --config "$CONFIG")
+CMD=("${PYTHON_CMD_ARR[@]}" -m torch.distributed.run --standalone --nproc_per_node "$NPROC_PER_NODE" -m pytorch_impl.distributed.train --config "$CONFIG")
 
 if [ "$USE_WANDB" = true ]; then
     CMD+=(--wandb)

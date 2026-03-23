@@ -5,13 +5,13 @@ export CUDA_VISIBLE_DEVICES="0"
 set -e
 
 PYTHON_CMD="uv run python"
-CONFIG="pytorch_impl/config_basic.yaml"
+CONFIG="pytorch_impl/basic/config.yaml"
 USE_WANDB=false
 RUN_NAME=""
 
 read -r -a PYTHON_CMD_ARR <<< "$PYTHON_CMD"
 
-CMD=("${PYTHON_CMD_ARR[@]}" -m pytorch_impl.train_basic --config "$CONFIG")
+CMD=("${PYTHON_CMD_ARR[@]}" -m pytorch_impl.basic.train --config "$CONFIG")
 
 if [ "$USE_WANDB" = true ]; then
     CMD+=(--wandb)

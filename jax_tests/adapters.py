@@ -18,7 +18,7 @@ from jax.sharding import PartitionSpec as P
 from jaxtyping import Float, Int
 
 from data import tokenizer, train_bpe
-from jax_impl import model, train
+from jax_impl.distributed import model, train
 from jax_impl.data import DatasetLike
 
 from .common import (
@@ -667,7 +667,7 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    from jax_impl import model as model_module
+    from jax_impl.distributed import model as model_module
 
     return model_module.save_checkpoint(model, optimizer, iteration, out)
 
@@ -690,7 +690,7 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    from jax_impl import model as model_module
+    from jax_impl.distributed import model as model_module
 
     return model_module.load_checkpoint(src, model, optimizer)
 

@@ -1,6 +1,5 @@
 import argparse
 import math
-import os
 import time
 from pathlib import Path
 
@@ -8,7 +7,8 @@ import numpy as np
 import torch
 import yaml
 
-from pytorch_impl import model_basic as model_module
+from pytorch_impl import data as data_module
+from pytorch_impl.basic import model as model_module
 
 
 def load_config(config_path: str) -> dict:
@@ -32,66 +32,17 @@ def setup_logging(use_wandb: bool, config: dict, run_name: str | None = None):
     return None
 
 
-class MemMapDataset:
-    """Memory-efficient dataset using np.memmap for large datasets."""
-
-    def __init__(self, data_path: str):
-        """
-        Initialize dataset with memory-mapped file.
-
-        Args:
-            data_path: Path to binary file containing tokenized data
-        """
-        if not os.path.exists(data_path):
-            raise FileNotFoundError(f"Data file not found: {data_path}")
-        self.data = np.memmap(data_path, dtype=np.uint16, mode="r")
-        print(f"Loaded dataset from {data_path} with {len(self.data):,} tokens")
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        return self.data[idx]
-
-
-class DummyDataset:
-    """Random token data for benchmarking. Same interface as MemMapDataset."""
-
-    def __init__(self, vocab_size: int, num_tokens: int = 1_000_000):
-        self.data = np.random.randint(0, vocab_size, size=num_tokens, dtype=np.uint16)
-        print(f"Created dummy dataset with {len(self.data):,} random tokens (vocab_size={vocab_size})")
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        return self.data[idx]
-
-
 def get_batch_from_memmap(
-    dataset: MemMapDataset | DummyDataset, batch_size: int, context_length: int, device: str
+    dataset: data_module.DatasetLike, batch_size: int, context_length: int, device: str
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Sample a batch from memory-mapped dataset.
-
-    Args:
-        dataset: MemMapDataset instance
-        batch_size: Number of sequences in batch
-        context_length: Length of each sequence
-        device: Device to place tensors on
-
-    Returns:
-        Tuple of (inputs, targets) tensors
-    """
-    # Use the model's get_batch function with the memmap data
-    return model_module.get_batch(dataset.data, batch_size, context_length, device)
+    return data_module.get_batch_from_memmap(dataset, batch_size, context_length, device)
 
 
 @torch.no_grad()
 def estimate_loss(
     model: torch.nn.Module,
-    train_dataset: MemMapDataset | DummyDataset,
-    val_dataset: MemMapDataset | DummyDataset | None,
+    train_dataset: data_module.DatasetLike,
+    val_dataset: data_module.DatasetLike | None,
     config: dict,
     device: str,
     eval_iters: int,
@@ -177,13 +128,13 @@ def train(
     dummy_data = config.get("data", {}).get("dummy_data", False)
     if dummy_data:
         vocab_size = config["model"]["vocab_size"]
-        train_dataset = DummyDataset(vocab_size)
+        train_dataset = data_module.DummyDataset(vocab_size)
         val_dataset = None
     else:
-        train_dataset = MemMapDataset(config["data"]["train_path"])
+        train_dataset = data_module.MemMapDataset(config["data"]["train_path"])
         val_dataset = None
         if "val_path" in config["data"] and config["data"]["val_path"]:
-            val_dataset = MemMapDataset(config["data"]["val_path"])
+            val_dataset = data_module.MemMapDataset(config["data"]["val_path"])
 
     # Initialize model
     print("\nInitializing model...")
@@ -388,7 +339,7 @@ def main():
     """Parse arguments and run training."""
     parser = argparse.ArgumentParser(description="Train Transformer Language Model")
     parser.add_argument(
-        "--config", type=str, default="pytorch_impl/config_basic.yaml", help="Path to YAML configuration file"
+        "--config", type=str, default="pytorch_impl/basic/config.yaml", help="Path to YAML configuration file"
     )
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging")
     parser.add_argument("--run-name", type=str, default=None, help="Name for this training run (for W&B)")

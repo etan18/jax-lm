@@ -13,7 +13,8 @@ import torch.nn.functional as F
 import yaml
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from pytorch_impl.model import TransformerLM
+from pytorch_impl import data as data_module
+from pytorch_impl.distributed.model import TransformerLM
 
 
 def load_config(config_path: str) -> dict:
@@ -37,51 +38,10 @@ def setup_logging(use_wandb: bool, config: dict, run_name: Optional[str] = None)
     return None
 
 
-class MemMapDataset:
-    """Memory-efficient dataset using np.memmap for large datasets."""
-
-    def __init__(self, data_path: str, verbose: bool = True):
-        """
-        Initialize dataset with memory-mapped file.
-
-        Args:
-            data_path: Path to binary file containing tokenized data
-        """
-        if not os.path.exists(data_path):
-            raise FileNotFoundError(f"Data file not found: {data_path}")
-        self.data = np.memmap(data_path, dtype=np.uint16, mode="r")
-        if verbose:
-            print(f"Loaded dataset from {data_path} with {len(self.data):,} tokens")
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        return self.data[idx]
-
-
 def get_batch_from_memmap(
-    dataset: MemMapDataset, batch_size: int, context_length: int, device: str
+    dataset: data_module.DatasetLike, batch_size: int, context_length: int, device: str
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Sample a batch from memory-mapped dataset.
-
-    Args:
-        dataset: MemMapDataset instance
-        batch_size: Number of sequences in batch
-        context_length: Length of each sequence
-        device: Device to place tensors on
-
-    Returns:
-        Tuple of (inputs, targets) tensors
-    """
-    start_indices = torch.randint(0, len(dataset.data) - context_length, (batch_size,))
-    batch = []
-    for start in start_indices:
-        batch_item = torch.tensor(dataset.data[start : start + context_length + 1], dtype=torch.long)
-        batch.append(batch_item)
-    batch_tensor = torch.stack(batch, dim=0).to(device)
-    return batch_tensor[:, :-1], batch_tensor[:, 1:]
+    return data_module.get_batch_from_memmap(dataset, batch_size, context_length, device)
 
 
 def get_lr_schedule(t: int, a_max: float, a_min: float, warmup_iters: int, cosine_annealing_iters: int) -> float:
@@ -417,8 +377,8 @@ def reduce_scalar_mean(value: float, device: str, runtime: DistributedRuntime) -
 @torch.no_grad()
 def estimate_loss(
     model: torch.nn.Module,
-    train_dataset: MemMapDataset,
-    val_dataset: Optional[MemMapDataset],
+    train_dataset: data_module.MemMapDataset,
+    val_dataset: Optional[data_module.MemMapDataset],
     config: dict,
     device: str,
     eval_iters: int,
@@ -529,11 +489,11 @@ def train(config_path: str, use_wandb: bool = False, run_name: Optional[str] = N
         # Load datasets with memory mapping
         if runtime.is_main:
             print("\nLoading datasets...")
-        train_dataset = MemMapDataset(config["data"]["train_path"], verbose=runtime.is_main)
+        train_dataset = data_module.MemMapDataset(config["data"]["train_path"], verbose=runtime.is_main)
 
         val_dataset = None
         if "val_path" in config["data"] and config["data"]["val_path"]:
-            val_dataset = MemMapDataset(config["data"]["val_path"], verbose=runtime.is_main)
+            val_dataset = data_module.MemMapDataset(config["data"]["val_path"], verbose=runtime.is_main)
 
         # Initialize model
         if runtime.is_main:
@@ -766,7 +726,7 @@ def main():
     """Parse arguments and run training."""
     parser = argparse.ArgumentParser(description="Train Transformer Language Model")
     parser.add_argument(
-        "--config", type=str, default="pytorch_impl/config.yaml", help="Path to YAML configuration file"
+        "--config", type=str, default="pytorch_impl/distributed/config.yaml", help="Path to YAML configuration file"
     )
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging")
     parser.add_argument("--run-name", type=str, default=None, help="Name for this training run (for W&B)")

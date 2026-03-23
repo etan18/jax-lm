@@ -8,7 +8,7 @@ from jax import Array
 from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
 
-from jax_impl import model as model_module
+from jax_impl.distributed import model as model_module
 
 
 class MemMapDataset:
