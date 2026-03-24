@@ -18,8 +18,11 @@ from jax.sharding import PartitionSpec as P
 from jaxtyping import Float, Int
 
 from data import tokenizer, train_bpe
-from jax_impl.distributed import model, train
-from jax_impl.data import DatasetLike
+
+try:
+    from jax_impl.data import DatasetLike
+except ModuleNotFoundError:
+    DatasetLike = Any
 
 from .common import (
     create_embedding_state,
@@ -30,6 +33,13 @@ from .common import (
 )
 
 # from .conftest import tensor_to_array
+
+
+def _import_distributed_modules():
+    from jax_impl.distributed import model as distributed_model
+    from jax_impl.distributed import train as distributed_train
+
+    return distributed_model, distributed_train
 
 
 def perpetual_rngs(seed: int):
@@ -60,10 +70,7 @@ def run_linear(
     Returns:
         Float[Array, "... d_out"]: The transformed output of your linear module.
     """
-    linear_layer = model.Linear(rngs=rngs, in_features=d_in, out_features=d_out)
-    linear_layer_state = create_linear_layer_state(weights)
-    nnx.update(linear_layer, linear_layer_state)
-    return linear_layer(in_features)
+    raise NotImplementedError("not implemented!")
 
 
 @perpetual_rngs(1)
@@ -86,10 +93,7 @@ def run_embedding(
     Returns:
         Float[Array, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-    embedding = model.Embedding(rngs=rngs, num_embeddings=vocab_size, embedding_dim=d_model)
-    embedding_state = create_embedding_state(weights)
-    nnx.update(embedding, embedding_state)
-    return embedding(token_ids)
+    raise NotImplementedError("not implemented!")
 
 
 @perpetual_rngs(2)
@@ -116,20 +120,7 @@ def run_swiglu(
     Returns:
         Float[Array, "... d_model"]: Output embeddings of the same shape as the input embeddings.
     """
-    # Example:
-    # If your state dict keys match, you can use `load_state_dict()`
-    # swiglu.load_state_dict(weights)
-    # You can also manually assign the weights
-    # swiglu.w1.weight.data = w1_weight
-    # swiglu.w2.weight.data = w2_weight
-    # swiglu.w3.weight.data = w3_weight
-    swiglu = model.SwiGLU(rngs=rngs, d_model=d_model, d_ff=d_ff)
-    swiglu_state = create_swiglu_state(w1_weight, w2_weight, w3_weight)
-    nnx.update(swiglu, swiglu_state)
-    # swiglu.w1.weights.data = w1_weight
-    # swiglu.w2.weights.data = w2_weight
-    # swiglu.w3.weights.data = w3_weight
-    return swiglu(in_features)
+    raise NotImplementedError("not implemented!")
 
 
 def run_scaled_dot_product_attention(
@@ -150,7 +141,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Array, " ... queries d_v"]: Output of SDPA
     """
-    return model.sdpa(Q, K, V, mask)
+    raise NotImplementedError("not implemented!")
 
 
 @perpetual_rngs(3)
@@ -186,11 +177,7 @@ def run_multihead_self_attention(
         Float[Array, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    MHA = model.MultiHeadSelfAttention(rngs=rngs, d_model=d_model, num_heads=num_heads)
-    MHA_state = create_mha_state(q_proj_weight, k_proj_weight, v_proj_weight, o_proj_weight)
-    nnx.update(MHA, MHA_state)
-    out = MHA(in_features, use_rope=False)
-    return out
+    raise NotImplementedError("not implemented!")
 
 
 @perpetual_rngs(4)
@@ -232,13 +219,7 @@ def run_multihead_self_attention_with_rope(
         Float[Array, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    MHA = model.MultiHeadSelfAttention(
-        rngs=rngs, d_model=d_model, num_heads=num_heads, rope_theta=theta, max_seq_len=max_seq_len
-    )
-    MHA_state = create_mha_state(q_proj_weight, k_proj_weight, v_proj_weight, o_proj_weight)
-    nnx.update(MHA, MHA_state)
-    out = MHA(in_features, use_rope=True)
-    return out
+    raise NotImplementedError("not implemented!")
 
 
 def run_rope(
@@ -260,9 +241,7 @@ def run_rope(
     Returns:
         Float[Array, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    rope = model.RotaryPositionalEmbedding(d_k, theta, max_seq_len)
-    result = rope(in_query_or_key, token_positions)
-    return result
+    raise NotImplementedError("not implemented!")
 
 
 @perpetual_rngs(5)
@@ -337,24 +316,7 @@ def run_transformer_block(
         Float[Array, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    TransformerBlock = model.TransformerBlock(
-        rngs=rngs, d_model=d_model, num_heads=num_heads, d_ff=d_ff, max_seq_len=max_seq_len, theta=theta
-    )
-    TransformerBlock_state = {
-        "MHA": create_mha_state(
-            weights["attn.q_proj.weight"],
-            weights["attn.k_proj.weight"],
-            weights["attn.v_proj.weight"],
-            weights["attn.output_proj.weight"],
-        ),
-        "SwiGLU": create_swiglu_state(weights["ffn.w1.weight"], weights["ffn.w2.weight"], weights["ffn.w3.weight"]),
-        "RMSNorm1": create_rmsnorm_state(weights["ln1.weight"]),
-        "RMSNorm2": create_rmsnorm_state(weights["ln2.weight"]),
-    }
-    nnx.update(TransformerBlock, TransformerBlock_state)
-
-    out = TransformerBlock(in_features)
-    return out
+    raise NotImplementedError("not implemented!")
 
 
 @perpetual_rngs(6)
@@ -438,52 +400,7 @@ def run_transformer_lm(
         Float[Array, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    # Create the TransformerLM model
-    transformer_lm = model.TransformerLM(
-        rngs=rngs,
-        d_model=d_model,
-        num_heads=num_heads,
-        d_ff=d_ff,
-        theta=rope_theta,
-        vocab_size=vocab_size,
-        context_length=context_length,
-        num_layers=num_layers,
-    )
-
-    # Create state dict mapping from reference weights to our model structure
-    state_dict = {}
-
-    # Token embeddings
-    state_dict["token_embeddings"] = create_embedding_state(weights["token_embeddings.weight"])
-    state_dict["layers"] = {
-        layer_idx: {
-            "MHA": create_mha_state(
-                weights[f"layers.{layer_idx}.attn.q_proj.weight"],
-                weights[f"layers.{layer_idx}.attn.k_proj.weight"],
-                weights[f"layers.{layer_idx}.attn.v_proj.weight"],
-                weights[f"layers.{layer_idx}.attn.output_proj.weight"],
-            ),
-            "SwiGLU": create_swiglu_state(
-                weights[f"layers.{layer_idx}.ffn.w1.weight"],
-                weights[f"layers.{layer_idx}.ffn.w2.weight"],
-                weights[f"layers.{layer_idx}.ffn.w3.weight"],
-            ),
-            "RMSNorm1": create_rmsnorm_state(weights[f"layers.{layer_idx}.ln1.weight"]),
-            "RMSNorm2": create_rmsnorm_state(weights[f"layers.{layer_idx}.ln2.weight"]),
-        }
-        for layer_idx in range(num_layers)
-    }
-
-    # Final layer norm and output projection
-    state_dict["ln1"] = create_rmsnorm_state(weights["ln_final.weight"])
-    state_dict["linear"] = create_linear_layer_state(weights["lm_head.weight"])
-
-    # Load the state dict
-    nnx.update(transformer_lm, state_dict)
-
-    # Run forward pass
-    out = transformer_lm(in_indices)
-    return out
+    raise NotImplementedError("not implemented!")
 
 
 @perpetual_rngs(7)
@@ -508,10 +425,7 @@ def run_rmsnorm(
         Float[Array,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    rms_norm = model.RMSNorm(rngs=rngs, d_model=d_model, eps=eps)
-    rms_norm_state = create_rmsnorm_state(weights)
-    nnx.update(rms_norm, rms_norm_state)
-    return rms_norm(in_features)
+    raise NotImplementedError("not implemented!")
 
 
 def run_silu(in_features: Float[Array, " ..."]) -> Float[Array, " ..."]:
@@ -525,7 +439,7 @@ def run_silu(in_features: Float[Array, " ..."]) -> Float[Array, " ..."]:
         Float[Array,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    return model.SwiGLU.SiLu(in_features)
+    raise NotImplementedError("not implemented!")
 
 
 @perpetual_rngs(8)
@@ -545,7 +459,7 @@ def run_get_batch(dataset: npt.NDArray, batch_size: int, context_length: int, rn
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    return model.get_batch(rngs, dataset, batch_size, context_length)
+    raise NotImplementedError("not implemented!")
 
 
 def run_softmax(in_features: Float[Array, " ..."], dim: int) -> Float[Array, " ..."]:
@@ -561,8 +475,7 @@ def run_softmax(in_features: Float[Array, " ..."], dim: int) -> Float[Array, " .
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    # softmax = model.Softmax()
-    return model.softmax(in_features, dim)
+    raise NotImplementedError("not implemented!")
 
 
 def run_cross_entropy(
@@ -580,7 +493,7 @@ def run_cross_entropy(
     Returns:
         Float[Array, ""]: The average cross-entropy loss across examples.
     """
-    return model.cross_entropy_loss(inputs, targets)
+    raise NotImplementedError("not implemented!")
 
 
 def run_gradient_clipping(gradient_state: State, max_l2_norm: float) -> State:
@@ -593,7 +506,7 @@ def run_gradient_clipping(gradient_state: State, max_l2_norm: float) -> State:
     Returns:
         State: the clipped gradient state.
     """
-    return model.gradient_clipping(gradient_state, max_l2_norm)
+    raise NotImplementedError("not implemented!")
 
 
 # def get_adamw_cls() -> Any:
@@ -607,20 +520,7 @@ def get_adamw_cls():
     """
     Returns a function that creates an nnx.Optimizer with Optax AdamW.
     """
-    def create_optimizer(model, lr=1e-3, weight_decay=0.01, betas=(0.9, 0.999), eps=1e-8):
-        return nnx.Optimizer(
-            model,
-            optax.adamw(
-                learning_rate=lr,
-                weight_decay=weight_decay,
-                b1=betas[0],
-                b2=betas[1],
-                eps=eps,
-            ),
-            wrt=nnx.Param,
-        )
-
-    return create_optimizer
+    raise NotImplementedError("not implemented!")
 
 
 def run_get_lr_cosine_schedule(
@@ -648,7 +548,7 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    return model.get_lr_schedule(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
+    raise NotImplementedError("not implemented!")
 
 
 def run_save_checkpoint(
@@ -667,9 +567,7 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    from jax_impl.distributed import model as model_module
-
-    return model_module.save_checkpoint(model, optimizer, iteration, out)
+    raise NotImplementedError("not implemented!")
 
 
 def run_load_checkpoint(
@@ -690,9 +588,7 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    from jax_impl.distributed import model as model_module
-
-    return model_module.load_checkpoint(src, model, optimizer)
+    raise NotImplementedError("not implemented!")
 
 
 def get_tokenizer(
@@ -750,6 +646,7 @@ def run_train_bpe(
 
 
 def get_mesh(mesh_shape: list[int], mesh_axis_names: list[str]) -> Mesh:
+    _, train = _import_distributed_modules()
     return train.create_mesh(mesh_shape, mesh_axis_names)
 
 
@@ -760,15 +657,7 @@ def get_sharded_batch(
     mesh: Mesh,
     batch_partition_spec: P | None = None,
 ):
-    rngs = nnx.Rngs(9)
-    return train.get_batch_from_memmap(
-        rngs,
-        dataset,
-        batch_size,
-        context_length,
-        mesh,
-        batch_partition_spec,
-    )
+    raise NotImplementedError("not implemented!")
 
 
 def get_sharded_model_and_optimizer(
@@ -777,11 +666,7 @@ def get_sharded_model_and_optimizer(
     mesh: Mesh,
     sharding_mode: str,
 ):
-    rngs = nnx.Rngs(10)
-    sc = model.get_sharding_config_for_mode(sharding_mode)
-    model.validate_mesh_for_mode(mesh, sharding_mode)
-    model.validate_model_partitioning(model_config, mesh, sc)
-    return model.create_model_and_optimizer(rngs, model_config, optimizer_config, sc, mesh)
+    raise NotImplementedError("not implemented!")
 
 
 def _normalize_spec(spec: P) -> tuple:
@@ -897,6 +782,7 @@ def get_expected_model_sharding_specs(num_layers: int, sharding_mode: str) -> di
         - O projection, SwiGLU w2: dense_out
         - RMSNorm layers: norm
     """
+    model, _ = _import_distributed_modules()
     sc = model.get_sharding_config_for_mode(sharding_mode)
     expected = {}
 
@@ -921,6 +807,7 @@ def get_expected_model_sharding_specs(num_layers: int, sharding_mode: str) -> di
 
 
 def get_expected_batch_sharding_spec(sharding_mode: str) -> P:
+    model, _ = _import_distributed_modules()
     return P(*model.get_batch_sharding_for_mode(sharding_mode))
 
 
